@@ -1,13 +1,10 @@
-# Copyright (c) 2017-present, Facebook, Inc.
-# All rights reserved.
+# Copyright (c) Facebook, Inc. and its affiliates.
 #
-# This source code is licensed under the license found in the LICENSE file in
-# the root directory of this source tree. An additional grant of patent rights
-# can be found in the PATENTS file in the same directory.
+# This source code is licensed under the MIT license found in the
+# LICENSE file in the root directory of this source tree.
 
 import torch.nn as nn
-
-from .learned_positional_embedding import LearnedPositionalEmbedding
+from .learned_positional_embedding import LearnedPositionalEmbedding, LearnedRelativePositionalEmbedding
 from .sinusoidal_positional_embedding import SinusoidalPositionalEmbedding
 
 
@@ -33,3 +30,21 @@ def PositionalEmbedding(
             embedding_dim, padding_idx, init_size=num_embeddings + padding_idx + 1,
         )
     return m
+
+
+def RelativePositionalEmbedding(
+        max_relative_pos: int,
+        num_heads: int,
+        embedding_dim: int,
+        unmasked: bool = False,
+        heads_share_embeddings: bool = False,
+        add_to_values: bool = False,
+):
+    return LearnedRelativePositionalEmbedding(
+        max_relative_pos=max_relative_pos,
+        num_heads=num_heads,
+        embedding_dim=embedding_dim,
+        heads_share_embeddings=heads_share_embeddings,
+        unmasked=unmasked,
+        add_to_values=add_to_values
+    )

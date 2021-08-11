@@ -15,6 +15,7 @@ from .dynamic_convolution import DynamicConv1dTBC
 from .gelu import gelu, gelu_accurate
 from .grad_multiply import GradMultiply
 from .highway import Highway
+from .layer_drop import LayerDropModuleList
 from .layer_norm import LayerNorm
 from .learned_positional_embedding import LearnedPositionalEmbedding
 from .lightweight_convolution import LightweightConv1dTBC
@@ -28,6 +29,7 @@ from .sinusoidal_positional_embedding import SinusoidalPositionalEmbedding
 from .transformer_sentence_encoder_layer import TransformerSentenceEncoderLayer
 from .transformer_sentence_encoder import TransformerSentenceEncoder
 from .unfold import unfold1d
+from .transformer_layer import TransformerDecoderLayer, TransformerEncoderLayer
 
 __all__ = [
     'AdaptiveInput',
