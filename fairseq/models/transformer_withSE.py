@@ -30,11 +30,11 @@ from fairseq.modules import (
 from fairseq.modules.quant_noise import quant_noise as apply_quant_noise_
 from torch import Tensor
 
-# from bert import BertTokenizer
+from bert import BertTokenizer
+from bert import BertModel
+
 DEFAULT_MAX_SOURCE_POSITIONS = 1024
 DEFAULT_MAX_TARGET_POSITIONS = 1024
-from transformers import BertTokenizer, BertModel
-# from bert import BertModel
 
 
 @register_model("flat_transformer_with_senemb")
@@ -316,19 +316,6 @@ class FlatTransformer_SE_Model(FairseqEncoderDecoderModel):
         )
         return decoder_out
 
-    # Since get_normalized_probs is in the Fairseq Model which is not scriptable,
-    # I rewrite the get_normalized_probs from Base Class to call the
-    # helper function in the Base Class.
-    @torch.jit.export
-    def get_normalized_probs(
-        self,
-        net_output: Tuple[Tensor, Optional[Dict[str, List[Optional[Tensor]]]]],
-        log_probs: bool,
-        sample: Optional[Dict[str, Tensor]] = None,
-    ):
-        """Get normalized probabilities (or log probs) from a net's output."""
-        return self.get_normalized_probs_scriptable(net_output, log_probs, sample)
-
 
 class FlatTransformer_SE_Encoder(FairseqEncoder):
     """
@@ -602,7 +589,7 @@ class FlatTransformer_SE_Encoder(FairseqEncoder):
         ### (by the first </s> tag (default id=2))
         src_tokens, src_sentences = self.src_tokens_split(src_tokens)
         #x, encoder_embedding = self.forward_embedding_tokens(src_tokens, self.embed_tokens)
-        x = bert_encoder_out['bert_encoder_out']
+        x = encoder_embedding = bert_encoder_out['bert_encoder_out']
         encoder_padding_mask = bert_encoder_out['bert_encoder_padding_mask']
         x_sen, _ = self.forward_embedding_sentences(src_sentences, self.embed_sentences)
         
@@ -643,15 +630,25 @@ class FlatTransformer_SE_Encoder(FairseqEncoder):
             x = self.layer_norm[layers+1](x)
 
 
-        return EncoderOut(
-            encoder_out=x,  # T x B x C
-            encoder_padding_mask=encoder_padding_mask,  # B x T
-            encoder_embedding=encoder_embedding,  # B x T x C
-            encoder_states=encoder_states,  # List[T x B x C]
-            src_tokens=None,
-            src_lengths=None,
-            encoder_attn=None
-        )
+        #return EncoderOut(
+        #    encoder_out=x,  # T x B x C
+        #    encoder_padding_mask=encoder_padding_mask,  # B x T
+        #    encoder_embedding=encoder_embedding,  # B x T x C
+        #    encoder_states=encoder_states,  # List[T x B x C]
+        #    src_tokens=None,
+        #    src_lengths=None,
+        #    encoder_attn=None
+        #)
+        return {
+            'encoder_out':x,  # T x B x C
+            'encoder_padding_mask':encoder_padding_mask,  # B x T
+            'encoder_embedding':encoder_embedding,  # B x T x C
+            'encoder_states':encoder_states,  # List[T x B x C]
+            'src_tokens':None,
+            'src_lengths':None,
+            'encoder_attn':None,
+            'encoder_tokens':None
+        }
 
     @torch.jit.export
     def reorder_encoder_out(self, encoder_out, bert_outs, new_order):
@@ -675,15 +672,16 @@ class FlatTransformer_SE_Encoder(FairseqEncoder):
         if bert_outs['bert_encoder_padding_mask'] is not None:
             bert_outs['bert_encoder_padding_mask'] = \
                 bert_outs['bert_encoder_padding_mask'].index_select(0, new_order)
-        return EncoderOut(
-            encoder_out=new_encoder_out["encoder_out"],  # T x B x C
-            encoder_padding_mask=new_encoder_out["encoder_padding_mask"],  # B x T
-            encoder_embedding=new_encoder_out["encoder_embedding"],  # B x T x C
-            encoder_states=encoder_states,  # List[T x B x C]
-            src_tokens=src_tokens,  # B x T
-            src_lengths=src_lengths,  # B x 1
-            encoder_attn=None
-        ), bert_outs
+        #return EncoderOut(
+        #    encoder_out=new_encoder_out["encoder_out"],  # T x B x C
+        #    encoder_padding_mask=new_encoder_out["encoder_padding_mask"],  # B x T
+        #    encoder_embedding=new_encoder_out["encoder_embedding"],  # B x T x C
+        #    encoder_states=encoder_states,  # List[T x B x C]
+        #    src_tokens=src_tokens,  # B x T
+        #    src_lengths=src_lengths,  # B x 1
+        #    encoder_attn=None
+        #), bert_outs
+        return encoder_out, bert_outs
 
     def max_positions(self):
         """Maximum input length supported by the encoder."""
@@ -840,6 +838,7 @@ class TransformerDecoder(FairseqIncrementalDecoder):
         self,
         prev_output_tokens,
         encoder_out: Optional[EncoderOut] = None,
+        bert_encoder_out = None,
         incremental_state: Optional[Dict[str, Dict[str, Optional[Tensor]]]] = None,
         features_only: bool = False,
         alignment_layer: Optional[int] = None,
@@ -954,8 +953,8 @@ class TransformerDecoder(FairseqIncrementalDecoder):
 
             x, layer_attn, _ = layer(
                 x,
-                encoder_out.encoder_out if encoder_out is not None else None,
-                encoder_out.encoder_padding_mask if encoder_out is not None else None,
+                encoder_out['encoder_out'] if encoder_out is not None else None,
+                encoder_out['encoder_padding_mask'] if encoder_out is not None else None,
                 incremental_state,
                 self_attn_mask=self_attn_mask,
                 self_attn_padding_mask=self_attn_padding_mask,
@@ -964,12 +963,13 @@ class TransformerDecoder(FairseqIncrementalDecoder):
             )
             inner_states.append(x)
             if layer_attn is not None and idx == alignment_layer:
-                attn = layer_attn.float().to(x)
-
+                #attn = layer_attn.float().to(x)
+                attn = layer_attn
+        ###for bert-nmt
         if attn is not None:
             if alignment_heads is not None:
                 attn = attn[:alignment_heads]
-
+        
             # average probabilities over heads
             attn = attn.mean(dim=0)
 
@@ -982,7 +982,7 @@ class TransformerDecoder(FairseqIncrementalDecoder):
         if self.project_out_dim is not None:
             x = self.project_out_dim(x)
 
-        return x, {"attn": [attn], "inner_states": inner_states}
+        return x, {"attn": attn, "inner_states": inner_states}
 
     def output_layer(self, features):
         """Project features to the vocabulary size."""
@@ -1097,11 +1097,11 @@ def Linear(in_features, out_features, bias=True):
 def base_architecture(args):
     args.encoder_embed_path = getattr(args, "encoder_embed_path", None)
     args.encoder_embed_dim = getattr(args, "encoder_embed_dim", 512)
-    args.encoder_ffn_embed_dim = getattr(args, "encoder_ffn_embed_dim", 1024)
+    args.encoder_ffn_embed_dim = getattr(args, "encoder_ffn_embed_dim", 2048)
     ###
     args.encoder_sen_embed_path = getattr(args, "encoder_sen_embed_path", None)
-    args.encoder_bot_layers = getattr(args, "encoder_bot_layers", 1)
-    args.encoder_top_layers = getattr(args, "encoder_top_layers", 5)
+    args.encoder_bot_layers = getattr(args, "encoder_bot_layers", 5)
+    args.encoder_top_layers = getattr(args, "encoder_top_layers", 1)
     ###
     args.encoder_attention_heads = getattr(args, "encoder_attention_heads", 4)
     args.encoder_normalize_before = getattr(args, "encoder_normalize_before", False)
@@ -1118,7 +1118,7 @@ def base_architecture(args):
     args.attention_dropout = getattr(args, "attention_dropout", 0.0)
     args.activation_dropout = getattr(args, "activation_dropout", 0.0)
     args.activation_fn = getattr(args, "activation_fn", "relu")
-    args.dropout = getattr(args, "dropout", 0.1)
+    args.dropout = getattr(args, "dropout", 0.3)
     args.adaptive_softmax_cutoff = getattr(args, "adaptive_softmax_cutoff", None)
     args.adaptive_softmax_dropout = getattr(args, "adaptive_softmax_dropout", 0)
     args.share_decoder_input_output_embed = getattr(
@@ -1151,25 +1151,25 @@ def base_architecture(args):
     args.quant_noise_scalar = getattr(args, "quant_noise_scalar", 0)
 
 
-@register_model_architecture("flat_transformer_with_senemb", "flat_transformer_with_senemb_base")
+@register_model_architecture("flat_transformer_with_senemb", "flat_transformer_with_senemb_small")
 def flat_transformer_with_senemb_base(args):
     args.encoder_bot_layers = getattr(args, "encoder_bot_layers", 4)
     args.encoder_top_layers = getattr(args, "encoder_top_layers", 2)
-    args.encoder_attention_heads = getattr(args, "encoder_attention_heads", 8)
+    args.encoder_attention_heads = getattr(args, "encoder_attention_heads", 4)
     args.encoder_embed_dim = getattr(args, "encoder_embed_dim", 512)
-    args.encoder_ffn_embed_dim = getattr(args, "encoder_ffn_embed_dim", 2048)
+    args.encoder_ffn_embed_dim = getattr(args, "encoder_ffn_embed_dim", 1024)
     args.decoder_layers = getattr(args, "decoder_layers", 6)
-    args.decoder_attention_heads = getattr(args, "decoder_attention_heads", 8)
+    args.decoder_attention_heads = getattr(args, "decoder_attention_heads", 4)
     args.decoder_embed_dim = getattr(args, "decoder_embed_dim", 512)
-    args.decoder_ffn_embed_dim = getattr(args, "decoder_ffn_embed_dim", 2048)
+    args.decoder_ffn_embed_dim = getattr(args, "decoder_ffn_embed_dim", 1024)
     args.dropout = getattr(args, "dropout", 0.3)
     base_architecture(args)
 
 
-@register_model_architecture("flat_transformer_with_senemb", "flat_transformer_with_senemb_small")
+@register_model_architecture("flat_transformer_with_senemb", "flat_transformer_with_senemb_base")
 def flat_transformer_with_senemb_small(args):
-    args.encoder_bot_layers = getattr(args, "encoder_bot_layers", 1)
-    args.encoder_top_layers = getattr(args, "encoder_top_layers", 5)
+    args.encoder_bot_layers = getattr(args, "encoder_bot_layers", 5)
+    args.encoder_top_layers = getattr(args, "encoder_top_layers", 1)
     args.encoder_attention_heads = getattr(args, "encoder_attention_heads", 4)
     args.encoder_embed_dim = getattr(args, "encoder_embed_dim", 768)
     args.encoder_ffn_embed_dim = getattr(args, "encoder_ffn_embed_dim", 1024)
