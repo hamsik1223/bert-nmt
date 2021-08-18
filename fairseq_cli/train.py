@@ -107,68 +107,6 @@ def main(args, init_distributed=False):
     print('| done training in {:.1f} seconds'.format(train_meter.sum))
 
 
-def should_stop_early(args, valid_loss):
-    # skip check if no validation was done in the current epoch
-    if valid_loss is None:
-        return False
-    if args.patience <= 0:
-        return False
-
-    def is_better(a, b):
-        return a > b if args.maximize_best_checkpoint_metric else a < b
-
-    prev_best = getattr(should_stop_early, 'best', None)
-    if prev_best is None or is_better(valid_loss, prev_best):
-        should_stop_early.best = valid_loss
-        should_stop_early.num_runs = 0
-        return False
-    else:
-        should_stop_early.num_runs += 1
-        if should_stop_early.num_runs >= args.patience:
-            logger.info('early stop since valid performance hasn\'t improved for last {} runs'.format(args.patience))
-            return True
-        else:
-            return False
-
-
-def validate_and_save(args, trainer, task, epoch_itr, valid_subsets, end_of_epoch):
-    num_updates = trainer.get_num_updates()
-    do_save = (
-        (
-            args.save_interval_updates > 0
-            and num_updates > 0
-            and num_updates % args.save_interval_updates == 0
-        )
-        or (end_of_epoch and epoch_itr.epoch % args.save_interval == 0)
-    )
-    do_validate = (
-        (
-            (not end_of_epoch and do_save)  # validate during mid-epoch saves
-            or (end_of_epoch and epoch_itr.epoch % args.validate_interval == 0)
-        )
-        and not args.disable_validation
-    )
-
-    # Validate
-    valid_losses = [None]
-    if do_validate:
-        valid_losses = validate(args, trainer, task, epoch_itr, valid_subsets)
-
-    # Stopping conditions
-    max_update = args.max_update or math.inf
-    should_stop = (
-        should_stop_early(args, valid_losses[0])
-        or trainer.get_num_updates() >= max_update
-    )
-
-    # Save checkpoint
-    if do_save or should_stop:
-        checkpoint_utils.save_checkpoint(args, trainer, epoch_itr, valid_losses[0])
-
-    return valid_losses, should_stop
-
-
-
 def train(args, trainer, task, epoch_itr):
     """Train the model for one epoch."""
     # Update parameters every N batches
@@ -216,14 +154,8 @@ def train(args, trainer, task, epoch_itr):
             and num_updates % args.save_interval_updates == 0
             and num_updates > 0
         ):
-            #valid_losses = validate(args, trainer, task, epoch_itr, valid_subsets)
-            #checkpoint_utils.save_checkpoint(args, trainer, epoch_itr, valid_losses[0])
-
-            valid_losses, should_stop = validate_and_save(
-                args, trainer, task, epoch_itr, valid_subsets, end_of_epoch
-            )
-            if should_stop:
-                break
+            valid_losses = validate(args, trainer, task, epoch_itr, valid_subsets)
+            checkpoint_utils.save_checkpoint(args, trainer, epoch_itr, valid_losses[0])
 
         if num_updates >= max_update:
             break

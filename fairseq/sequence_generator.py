@@ -149,7 +149,7 @@ class SequenceGenerator(object):
         # compute the encoder output for each beam
         bertinput = sample['net_input']['bert_input']
         bert_encoder_padding_mask = bertinput.eq(model.models[0].berttokenizer.pad())
-        bert_outs, _ = model.models[0].bert_encoder(bertinput, output_all_encoded_layers=True, attention_mask= bert_encoder_padding_mask.logical_not())
+        bert_outs, _ = model.models[0].bert_encoder(bertinput, output_all_encoded_layers=True, attention_mask= 1. - bert_encoder_padding_mask)
         bert_outs = bert_outs[self.bert_output_layer]
         if model.models[0].mask_cls_sep:
             bert_encoder_padding_mask += bertinput.eq(model.models[0].berttokenizer.cls())
@@ -160,9 +160,8 @@ class SequenceGenerator(object):
             'bert_encoder_out': bert_outs,
             'bert_encoder_padding_mask': bert_encoder_padding_mask,
         }]
-        #if model.models[0].__class__.__name__ == 'TransformerS2Model': #'flat_transformer_with_senemb_base'
-        encoder_input['bert_encoder_out'] = bert_outs[0]
-        #encoder_outs = model.forward_encoder(encoder_input)
+        if model.models[0].__class__.__name__ == 'TransformerS2Model':
+            encoder_input['bert_encoder_out'] = bert_outs[0]
         encoder_outs = model.forward_encoder(encoder_input)
         new_order = torch.arange(bsz).view(-1, 1).repeat(1, beam_size).view(-1)
         new_order = new_order.to(src_tokens.device).long()
@@ -273,54 +272,38 @@ class SequenceGenerator(object):
                 if self.match_source_len and step > src_lengths[unfin_idx]:
                     score = -math.inf
 
-                #def get_hypo():
-                #
-                #    if attn_clone is not None:
-                #        # remove padding tokens from attn scores
-                #        hypo_attn = attn_clone[i][nonpad_idxs[sent]]
-                #        _, alignment = hypo_attn.max(dim=0)
-                #    else:
-                #        hypo_attn = None
-                #        alignment = None
-                #
-                #    return {
-                #        'tokens': tokens_clone[i],
-                #        'score': score,
-                #        'attention': hypo_attn,  # src_len x tgt_len
-                #        'alignment': alignment,
-                #        'positional_scores': pos_scores[i],
-                #    }
-                #
-                #if len(finalized[sent]) < beam_size:
-                #    finalized[sent].append(get_hypo())
-                #elif not self.stop_early and score > worst_finalized[sent]['score']:
-                #    # replace worst hypo for this sentence with new/better one
-                #    worst_idx = worst_finalized[sent]['idx']
-                #    if worst_idx is not None:
-                #        finalized[sent][worst_idx] = get_hypo()
-                #
-                #    # find new worst finalized hypo for this sentence
-                #    idx, s = min(enumerate(finalized[sent]), key=lambda r: r[1]['score'])
-                #    worst_finalized[sent] = {
-                #        'score': s['score'],
-                #        'idx': idx,
-                #    }
+                def get_hypo():
 
-                if len(finalized[sent]) < beam_size:
                     if attn_clone is not None:
                         # remove padding tokens from attn scores
-                        hypo_attn = attn_clone[i]
+                        hypo_attn = attn_clone[i][nonpad_idxs[sent]]
+                        _, alignment = hypo_attn.max(dim=0)
                     else:
-                        hypo_attn = torch.empty(0)
-                    finalized[sent].append(
-                        {
-                            "tokens": tokens_clone[i],
-                            "score": score,
-                            "attention": hypo_attn,  # src_len x tgt_len
-                            "alignment": torch.empty(0),
-                            "positional_scores": pos_scores[i],
-                        }
-                    )
+                        hypo_attn = None
+                        alignment = None
+
+                    return {
+                        'tokens': tokens_clone[i],
+                        'score': score,
+                        'attention': hypo_attn,  # src_len x tgt_len
+                        'alignment': alignment,
+                        'positional_scores': pos_scores[i],
+                    }
+
+                if len(finalized[sent]) < beam_size:
+                    finalized[sent].append(get_hypo())
+                elif not self.stop_early and score > worst_finalized[sent]['score']:
+                    # replace worst hypo for this sentence with new/better one
+                    worst_idx = worst_finalized[sent]['idx']
+                    if worst_idx is not None:
+                        finalized[sent][worst_idx] = get_hypo()
+
+                    # find new worst finalized hypo for this sentence
+                    idx, s = min(enumerate(finalized[sent]), key=lambda r: r[1]['score'])
+                    worst_finalized[sent] = {
+                        'score': s['score'],
+                        'idx': idx,
+                    }
 
             newly_finished = []
             for sent, unfin_idx in sents_seen:
@@ -361,8 +344,7 @@ class SequenceGenerator(object):
             # Record attention scores
             if avg_attn_scores is not None:
                 if attn is None:
-                    #attn = scores.new(bsz * beam_size, src_tokens.size(1), max_len + 2)
-                    attn = scores.new(bsz * beam_size, avg_attn_scores.size(1), max_len + 2)
+                    attn = scores.new(bsz * beam_size, src_tokens.size(1), max_len + 2)
                     attn_buf = attn.clone()
                     nonpad_idxs = src_tokens.ne(self.pad)
                 attn[:, :, step + 1].copy_(avg_attn_scores)
