@@ -30,11 +30,11 @@ from fairseq.modules import (
 from fairseq.modules.quant_noise import quant_noise as apply_quant_noise_
 from torch import Tensor
 
-# from bert import BertTokenizer
+from bert import BertTokenizer
+from bert import BertModel
+
 DEFAULT_MAX_SOURCE_POSITIONS = 1024
 DEFAULT_MAX_TARGET_POSITIONS = 1024
-from transformers import BertTokenizer, BertModel
-# from bert import BertModel
 
 
 @register_model("flat_transformer_with_senemb")
@@ -316,19 +316,6 @@ class FlatTransformer_SE_Model(FairseqEncoderDecoderModel):
         )
         return decoder_out
 
-    # Since get_normalized_probs is in the Fairseq Model which is not scriptable,
-    # I rewrite the get_normalized_probs from Base Class to call the
-    # helper function in the Base Class.
-    @torch.jit.export
-    def get_normalized_probs(
-        self,
-        net_output: Tuple[Tensor, Optional[Dict[str, List[Optional[Tensor]]]]],
-        log_probs: bool,
-        sample: Optional[Dict[str, Tensor]] = None,
-    ):
-        """Get normalized probabilities (or log probs) from a net's output."""
-        return self.get_normalized_probs_scriptable(net_output, log_probs, sample)
-
 
 class FlatTransformer_SE_Encoder(FairseqEncoder):
     """
@@ -602,7 +589,7 @@ class FlatTransformer_SE_Encoder(FairseqEncoder):
         ### (by the first </s> tag (default id=2))
         src_tokens, src_sentences = self.src_tokens_split(src_tokens)
         #x, encoder_embedding = self.forward_embedding_tokens(src_tokens, self.embed_tokens)
-        x = bert_encoder_out['bert_encoder_out']
+        x = encoder_embedding = bert_encoder_out['bert_encoder_out']
         encoder_padding_mask = bert_encoder_out['bert_encoder_padding_mask']
         x_sen, _ = self.forward_embedding_sentences(src_sentences, self.embed_sentences)
         
